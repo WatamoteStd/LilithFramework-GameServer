@@ -36,6 +36,11 @@ public class WorldHolder : IWorldBroadcaster
     private readonly Stopwatch _clock = new();
     private long _tick = 0; 
 
+
+    // NETWORKING ==============================================
+
+    private S2C_WorldSnapshotPacket _snapshot = S2C_WorldSnapshotPacket.Create();
+
     public WorldHolder(INetworkBroadcaster broadcaster)
     {
         _broadcaster = broadcaster;
@@ -147,6 +152,12 @@ public class WorldHolder : IWorldBroadcaster
 
         _tick++;
 
+        if(_peerIdToUnit.Count > 0 && _broadcaster.HasPeers())
+        {
+            BuildSnapshot();
+            _broadcaster.SendToAllPeers(ref _snapshot);
+        }
+
     }
 
     /// <summary>
@@ -157,6 +168,54 @@ public class WorldHolder : IWorldBroadcaster
     public void EnqueueCommand(NetworkCommand command) => _commandsQueue.Enqueue(command);
 
     public void EnqueuePlayerJoined(PlayerJoinedCommand command) => _playerJoins.Enqueue(command);
+
+
+
+    // WORLD HOLDER => NETWORK WORLD =============================
+    private void BuildSnapshot()
+    {
+        
+        int count = 0;
+        int max = S2C_WorldSnapshotPacket.MaxEntities;
+
+        foreach(var unit in _peerIdToUnit.Values)
+        {
+            
+            if(count >= max)
+            {
+                Console.WriteLine($"[World] WARN: snapshot overflow, {_peerIdToUnit.Count} units, capped at max {max}");
+                break;
+            }
+
+            ref var e = ref _snapshot.Entities[count];
+
+            e.Id = unit.EntityId;
+            e.Hero = unit.Hero;
+            e.Team = unit.EntityTeam;
+            e.Flags = unit.IsDead ? EntityFlags.Dead : EntityFlags.None;
+            e.X = unit.Position.X;
+            e.Z = unit.Position.Z;
+            e.Facing = 0;
+            e.Health = (ushort)unit.Health;
+            e.MaxHealth = (ushort)unit.MaxHealth;
+            e.Mana = (ushort)unit.Mana;
+            e.MaxMana = (ushort)unit.MaxMana;
+            e.Speed = unit.Speed; 
+            e.Radius = unit.Radius;
+            e.Damage = unit.Damage;
+            e.AttackTime = unit.BasicAttackTime;
+            e.AttackRange = unit.AttackRange;
+
+            count++;
+
+        }
+
+        _snapshot.Count = (byte)count;
+        _snapshot.Tick = (uint)_tick;
+
+    }
+
+
 
 
     public void Stop()

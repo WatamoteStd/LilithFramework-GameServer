@@ -32,6 +32,24 @@ public partial class NetworkManager
         SendTo(peerId, buffer[..length]);
     }
 
+
+    public void SendToAllPeers(ref S2C_WorldSnapshotPacket pck)
+    {
+        
+        var peers = _reiHost.GetPeers();
+        Span<byte> buffer = stackalloc byte[1500];
+        int writen = PacketTranslator.Serialize(PacketTypes.S2C_WorldSnapshot, buffer, ref pck);
+
+        for(int i = 0; i < peers.Length; i++)
+        {
+            SendTo(peers[i].Id, buffer[..writen]);
+        }
+
+    }
+
+    public bool HasPeers() => _reiHost.PeerCount > 0;
+
+
     private void SendTo(uint peerId, ReadOnlySpan<byte> data)
     {
         var peers = _reiHost.GetPeers();
