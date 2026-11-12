@@ -13,13 +13,14 @@ using System.Buffers;
 using Entities;
 using Interfaces;
 using System.Diagnostics;
+using GameWorld.Entities;
 
 namespace GameWorld;
 
 public class WorldHolder : IWorldBroadcaster
 {
     
-    private readonly Dictionary<uint, UnitEntity> _peerIdToUnit = new();
+    private readonly Dictionary<uint, ServerUnitEntity> _peerIdToUnit = new();
     private ushort _nextEntityId = 1;
     private Thread? _gameThread;
     private ConcurrentQueue<NetworkCommand> _commandsQueue = new();
@@ -62,24 +63,13 @@ public class WorldHolder : IWorldBroadcaster
 
     }
 
-    public UnitEntity AddPlayer(uint peerId, MatchTeam team)
-    {
-        MatchTeam newTeam = _peerIdToUnit.Count % 2 == 0 ? MatchTeam.Light : MatchTeam.Dark;
-        UnitEntity playerUnit = new UnitEntity(peerId, _nextEntityId, new Vector3(0, 1, 0), team);
-
-        _peerIdToUnit.Add(peerId, playerUnit);
-        _nextEntityId++;
-        return playerUnit;
-
-    }
-
     /// <summary>
     /// Lobby handoff: entity id, team and hero were already chosen there, so
     /// the world only creates the unit and keeps the id counter ahead.
     /// </summary>
     public UnitEntity AddPlayer(uint peerId, ushort entityId, MatchTeam team, HeroId hero)
     {
-        UnitEntity playerUnit = new UnitEntity(peerId, entityId, new Vector3(0, 1, 0), team, hero);
+        ServerUnitEntity playerUnit = new ServerUnitEntity(peerId, entityId, new Vector3(0, 1, 0), team, hero);
         _peerIdToUnit[peerId] = playerUnit;
 
         if (entityId >= _nextEntityId) _nextEntityId = (ushort)(entityId + 1);
@@ -140,13 +130,49 @@ public class WorldHolder : IWorldBroadcaster
                 
                 switch(cmd.Type)
                 {
-                    
+                    case PacketTypes.C2S_ChatMessage:
+                        HandleChat(cmd);
+                    break;
+
+                    case PacketTypes.C2S_MoveIntent:
+                    {
+
+                        if(cmd.PayloadLength == 0)
+                        {
+                            ArrayPool<byte>.Shared.Return(cmd.Payload);
+                            break;
+                        }
+
+                        if(!_peerIdToUnit.TryGetValue(cmd.PeerId, out var unit))
+                        {
+                            Console.WriteLine($"[WorldHolder] PeerId:{cmd.PeerId} no existing units found.");
+                            ArrayPool<byte>.Shared.Return(cmd.Payload);
+                            continue;
+                        }
+
+                        C2S_MoveIntentPacket pck = default;
+                        PacketTranslator.Read(cmd.Payload.AsSpan(2, cmd.PayloadLength - 2), ref pck);
+                        ArrayPool<byte>.Shared.Return(cmd.Payload);
+
+                        unit.SetMoveTarget(pck.X, pck.Z);
+
+                    }
+                    break;
+
                     default:
                         Console.WriteLine($"[World] Unhandled cmd: {cmd.Type}");
                         if(cmd.Payload is not null) ArrayPool<byte>.Shared.Return(cmd.Payload);
                     break;
 
                 }
+
+        }
+
+        foreach(var pair in _peerIdToUnit)
+        {
+            
+            var entity = pair.Value;
+            entity.Update(FIXED_DELTA_TIME);
 
         }
 
@@ -168,6 +194,39 @@ public class WorldHolder : IWorldBroadcaster
     public void EnqueueCommand(NetworkCommand command) => _commandsQueue.Enqueue(command);
 
     public void EnqueuePlayerJoined(PlayerJoinedCommand command) => _playerJoins.Enqueue(command);
+
+    // Chat history, keyed by simulation tick. Kept on the world thread: no
+    // validation beyond the packet length, exactly as the design says.
+    private const int ChatHistoryLimit = 200;
+    private readonly List<ChatMessageRecord> _chatHistory = new();
+
+    private void HandleChat(NetworkCommand cmd)
+    {
+        if (cmd.Payload is null) return;
+
+        try
+        {
+            C2S_ChatMessagePacket incoming = default;
+            PacketTranslator.Read(cmd.Payload.AsSpan(2, cmd.PayloadLength - 2), ref incoming);
+
+            string text = incoming.GetText();
+            if (text.Length == 0) return;
+
+            ChatMessageRecord record = new((uint)_tick, cmd.PeerId, text);
+            _chatHistory.Add(record);
+
+            if (_chatHistory.Count > ChatHistoryLimit) _chatHistory.RemoveAt(0);
+
+            S2C_ChatMessagePacket outbound = S2C_ChatMessagePacket.FromRecord(record);
+            _broadcaster.SendToAllPeers(ref outbound);
+
+            Console.WriteLine($"[Chat] tick {record.Tick} peer {record.SenderId}: {text}");
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(cmd.Payload);
+        }
+    }
 
 
 
@@ -214,9 +273,6 @@ public class WorldHolder : IWorldBroadcaster
         _snapshot.Tick = (uint)_tick;
 
     }
-
-
-
 
     public void Stop()
     {

@@ -37,8 +37,12 @@ public partial class NetworkManager
     {
         
         var peers = _reiHost.GetPeers();
+
         Span<byte> buffer = stackalloc byte[1500];
         int writen = PacketTranslator.Serialize(PacketTypes.S2C_WorldSnapshot, buffer, ref pck);
+
+        if (pck.Tick % 60 == 0)
+            Console.WriteLine($"[Net] Snapshot tick={pck.Tick} count={pck.Count} peers={peers.Length} size={writen}");
 
         for(int i = 0; i < peers.Length; i++)
         {
@@ -48,6 +52,17 @@ public partial class NetworkManager
     }
 
     public bool HasPeers() => _reiHost.PeerCount > 0;
+
+    public void SendToAllPeers(ref S2C_ChatMessagePacket pck)
+    {
+        var peers = _reiHost.GetPeers();
+
+        Span<byte> buffer = stackalloc byte[S2C_ChatMessagePacket.MaxSize + 2];
+        int written = PacketTranslator.Serialize(PacketTypes.S2C_ChatMessage, buffer, ref pck);
+
+        for (int i = 0; i < peers.Length; i++)
+            SendTo(peers[i].Id, buffer[..written]);
+    }
 
 
     private void SendTo(uint peerId, ReadOnlySpan<byte> data)

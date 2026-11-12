@@ -66,6 +66,7 @@ public partial class NetworkManager : INetworkBroadcaster
                         // Gameplay intents go to the world thread.
                         case PacketTypes.C2S_MoveIntent:
                         case PacketTypes.C2S_AttackIntent:
+                        case PacketTypes.C2S_ChatMessage:
                             {
                                 ForwardToWorld(peer.Id, packetType, bytesRead);
                             }

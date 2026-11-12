@@ -9,6 +9,7 @@ public interface INetworkBroadcaster
     
     void SendToPeer(uint peerId, ref S2C_HandshakeResponsePacket pck);
     void SendToAllPeers(ref S2C_WorldSnapshotPacket pck);
+    void SendToAllPeers(ref S2C_ChatMessagePacket pck);
     bool HasPeers();
 
 }
